@@ -124,15 +124,42 @@ def calculate_jsd_and_mean_diff(imputed_values, ground_truth_values, feature_nam
         return mean_diff, np.nan
 
 
-def plot_distribution_comparison(last_4_features, feature_metrics, test_imputations_denorm, test_original_denorm, test_masks, feature_names):
-    # Create distribution comparison plots
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+def plot_distribution_comparison(test_imputations_denorm, test_original_denorm, test_masks, feature_names, n_features=25):
+    """
+    Create distribution comparison plots for random features in a 5x5 grid.
+    
+    Args:
+        test_imputations_denorm: Denormalized imputed values
+        test_original_denorm: Denormalized ground truth values  
+        test_masks: Binary masks (1=observed, 0=missing)
+        feature_names: List of feature names
+        n_features: Number of features to plot (default 25 for 5x5 grid)
+    """
+    # Find features that have missing values
+    features_with_missing = []
+    for i, feature_name in enumerate(feature_names):
+        missing_positions = (test_masks[:, i] == 0)  # 0 = missing in model tensors
+        if missing_positions.sum() > 0:
+            features_with_missing.append((i, feature_name))
+    
+    if len(features_with_missing) < n_features:
+        n_features = len(features_with_missing)
+        print(f"Only {n_features} features have missing values, showing all of them.")
+    
+    # Randomly select features to plot
+    np.random.seed(42)  # For reproducible selection
+    selected_indices = np.random.choice(len(features_with_missing), size=min(n_features, len(features_with_missing)), replace=False)
+    selected_features = [features_with_missing[i] for i in selected_indices]
+    
+    # Create 5x5 grid
+    fig, axes = plt.subplots(5, 5, figsize=(20, 16))
+    fig.suptitle('Distribution Comparison: Dataset vs Imputed Values', fontsize=16, fontweight='bold')
     axes = axes.flatten()
 
-    for idx, feature_name in enumerate(last_4_features):        
-        # Get feature index
-        feature_idx = feature_names.index(feature_name)
-        
+    for idx, (feature_idx, feature_name) in enumerate(selected_features):
+        if idx >= 25:  # Safety check for 5x5 grid
+            break
+            
         # Get imputed and ground truth values for missing positions only
         missing_positions = (test_masks[:, feature_idx] == 0)  # 0 = missing in model tensors
         
@@ -151,84 +178,119 @@ def plot_distribution_comparison(last_4_features, feature_metrics, test_imputati
                 
                 # Calculate bins for both distributions
                 all_values = np.concatenate([imputed_clean, gt_clean])
-                bins = np.linspace(all_values.min(), all_values.max(), 30)
+                bins = np.linspace(all_values.min(), all_values.max(), 20)  # Fewer bins for smaller plots
                 
                 # Plot histograms
                 ax.hist(gt_clean, bins=bins, alpha=0.7, label='Dataset', 
-                    color='skyblue', density=True, edgecolor='black', linewidth=0.5)
+                    color='skyblue', density=True, edgecolor='black', linewidth=0.3)
                 ax.hist(imputed_clean, bins=bins, alpha=0.7, label='Imputed', 
-                    color='lightcoral', density=True, edgecolor='black', linewidth=0.5)
+                    color='lightcoral', density=True, edgecolor='black', linewidth=0.3)
                 
                 # Add statistical information
                 gt_mean, gt_std = gt_clean.mean(), gt_clean.std()
                 imp_mean, imp_std = imputed_clean.mean(), imputed_clean.std()
                 correlation = np.corrcoef(gt_clean, imputed_clean)[0, 1] if len(gt_clean) > 1 else 0
 
+                # Calculate MMD (Maximum Mean Discrepancy)
+                def rbf_kernel(X, Y, gamma=1.0):
+                    """RBF kernel for MMD calculation"""
+                    XX = np.sum(X**2, axis=1, keepdims=True)
+                    YY = np.sum(Y**2, axis=1, keepdims=True)
+                    XY = np.dot(X, Y.T)
+                    distances = XX + YY.T - 2*XY
+                    return np.exp(-gamma * distances)
+                
+                def mmd_rbf(X, Y, gamma=1.0):
+                    """Calculate MMD with RBF kernel"""
+                    X = X.reshape(-1, 1)
+                    Y = Y.reshape(-1, 1)
+                    
+                    m, n = len(X), len(Y)
+                    
+                    K_XX = rbf_kernel(X, X, gamma)
+                    K_YY = rbf_kernel(Y, Y, gamma)
+                    K_XY = rbf_kernel(X, Y, gamma)
+                    
+                    mmd = (np.sum(K_XX) / (m * m) + 
+                           np.sum(K_YY) / (n * n) - 
+                           2 * np.sum(K_XY) / (m * n))
+                    return np.sqrt(max(mmd, 0))  # Ensure non-negative
+                
+                try:
+                    mmd_value = mmd_rbf(gt_clean, imputed_clean)
+                except:
+                    mmd_value = np.nan
+
+                # Calculate Jensen-Shannon Divergence
+                try:
+                    # Create histograms with same bins for JSD
+                    data_range = (min(gt_clean.min(), imputed_clean.min()), 
+                                 max(gt_clean.max(), imputed_clean.max()))
+                    
+                    if data_range[1] == data_range[0]:
+                        jsd_value = 0.0  # No divergence if all values are the same
+                    else:
+                        bins = np.linspace(data_range[0], data_range[1], 30)
+                        
+                        # Get histogram probabilities
+                        hist_gt, _ = np.histogram(gt_clean, bins=bins, density=True)
+                        hist_imp, _ = np.histogram(imputed_clean, bins=bins, density=True)
+                        
+                        # Normalize to probabilities
+                        hist_gt = hist_gt + 1e-10  # Add small epsilon to avoid zeros
+                        hist_imp = hist_imp + 1e-10
+                        hist_gt = hist_gt / hist_gt.sum()
+                        hist_imp = hist_imp / hist_imp.sum()
+                        
+                        # Calculate Jensen-Shannon divergence
+                        jsd_value = jensenshannon(hist_gt, hist_imp)
+                except:
+                    jsd_value = np.nan
+
                 # Add vertical lines for means
-                ax.axvline(gt_mean, color='blue', linestyle='--', alpha=0.8, label='Dataset Mean')
-                ax.axvline(imp_mean, color='red', linestyle='--', alpha=0.8, label='Imp Mean')
+                ax.axvline(gt_mean, color='blue', linestyle='--', alpha=0.8, linewidth=1, label='Dataset Mean' if idx == 0 else "")
+                ax.axvline(imp_mean, color='red', linestyle='--', alpha=0.8, linewidth=1, label='Imputed Mean' if idx == 0 else "")
                 
-                # Set labels and title
-                ax.set_xlabel(f'{feature_name} Values')
-                ax.set_ylabel('Density')
-                ax.legend()
+                # Set labels and title (smaller font for 5x5 grid)
+                ax.set_xlabel(f'{feature_name[:15]}', fontsize=8)  # Truncate long names
+                ax.set_ylabel('Density', fontsize=8)
+                ax.tick_params(labelsize=7)
+                
+                # Add correlation, MMD, and JSD as title
+                ax.set_title(f'R²={correlation:.3f}, MMD={mmd_value:.3f}, JSD={jsd_value:.3f}', fontsize=7, fontweight='bold')
+                
+                # Add legend only to first plot
+                if idx == 0:
+                    ax.legend(fontsize=7, loc='upper right')
+                
                 ax.grid(True, alpha=0.3)
-                
-                # Add performance metrics text box
-                metrics = feature_metrics[feature_name]
 
             else:
-                axes[idx].text(0.5, 0.5, f'{feature_name}\nNo valid data', 
-                            ha='center', va='center', transform=axes[idx].transAxes)
-                axes[idx].set_title(f'{feature_name} - No Valid Data')
+                axes[idx].text(0.5, 0.5, f'{feature_name[:15]}\nNo valid data', 
+                            ha='center', va='center', transform=axes[idx].transAxes, fontsize=8)
+                axes[idx].set_title(f'{feature_name[:15]} - No Valid Data', fontsize=8)
         else:
-            axes[idx].text(0.5, 0.5, f'{feature_name}\nNo missing values', 
-                        ha='center', va='center', transform=axes[idx].transAxes)
-            axes[idx].set_title(f'{feature_name} - No Missing Values')
+            axes[idx].text(0.5, 0.5, f'{feature_name[:15]}\nNo missing values', 
+                        ha='center', va='center', transform=axes[idx].transAxes, fontsize=8)
+            axes[idx].set_title(f'{feature_name[:15]} - No Missing Values', fontsize=8)
 
     # Hide any unused subplots
-    for idx in range(len(last_4_features), 4):
+    for idx in range(len(selected_features), 25):
         axes[idx].set_visible(False)
 
     plt.tight_layout()
     plt.show()
 
-    # Additional statistical comparison table
-    print(f"\nDetailed Statistical Comparison:")
-    print(f"{'Feature':<15} {'Dataset Mean':<10} {'Imp Mean':<10} {'Dataset Std':<10} {'Imp Std':<10} {'Mean Diff':<10} {'Corr':<8}")
-    print("-" * 85)
-
-    for feature_name in last_4_features:
-        feature_idx = feature_names.index(feature_name)
-        missing_positions = (test_masks[:, feature_idx] == 0)  # 0 = missing in model tensors
-        
-        if missing_positions.sum() > 0:
-            imputed_values = test_imputations_denorm[missing_positions, feature_idx]
-            ground_truth_values = test_original_denorm[missing_positions, feature_idx]
-            
-            valid_mask = np.isfinite(imputed_values) & np.isfinite(ground_truth_values)
-            imputed_clean = imputed_values[valid_mask]
-            gt_clean = ground_truth_values[valid_mask]
-            
-            if len(imputed_clean) > 0 and len(gt_clean) > 0:
-                gt_mean, gt_std = gt_clean.mean(), gt_clean.std()
-                imp_mean, imp_std = imputed_clean.mean(), imputed_clean.std()
-                mean_diff = abs(gt_mean - imp_mean)
-                correlation = np.corrcoef(gt_clean, imputed_clean)[0, 1] if len(gt_clean) > 1 else 0
-                
-                print(f"{feature_name:<15} {gt_mean:<10.4f} {imp_mean:<10.4f} {gt_std:<10.4f} "
-                    f"{imp_std:<10.4f} {mean_diff:<10.4f} {correlation:<8.3f}")
-
-def plot_prediction_scatter(test_imputations, test_originals, test_masks, feature_names, n_features=8):
+def plot_prediction_scatter(test_imputations, test_originals, test_masks, feature_names, n_features=25):
     """
-    Create a nice scatter plot showing predicted vs ground truth values for random features.
+    Create scatter plots showing predicted vs ground truth values for random features in a 5x5 grid.
     
     Args:
         test_imputations: Model predictions [n_samples, n_features]
         test_originals: Ground truth values [n_samples, n_features]
         test_masks: Binary masks (1=observed, 0=missing) [n_samples, n_features]
         feature_names: List of feature names
-        n_features: Number of random features to plot
+        n_features: Number of random features to plot (default 25 for 5x5 grid)
     """
     # Create masks for missing values (where we need to evaluate imputation)
     missing_mask = (test_masks == 0)  # True where values were missing
@@ -244,32 +306,38 @@ def plot_prediction_scatter(test_imputations, test_originals, test_masks, featur
     np.random.seed(42)  # For reproducible selection
     selected_features = np.random.choice(features_with_missing, size=n_features, replace=False)
     
-    # Create subplots
-    fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+    # Create 5x5 subplots
+    fig, axes = plt.subplots(5, 5, figsize=(20, 16))
     fig.suptitle('Predicted vs Ground Truth Values (Missing Positions Only)', fontsize=16, fontweight='bold')
     
     axes = axes.flatten()
     
     for idx, feature_idx in enumerate(selected_features):
+        if idx >= 25:  # Safety check for 5x5 grid
+            break
+            
         ax = axes[idx]
         
         # Get missing positions for this feature
         feature_missing_mask = missing_mask[:, feature_idx]
         
         if feature_missing_mask.sum() == 0:
+            ax.text(0.5, 0.5, f'{feature_names[feature_idx][:15]}\nNo missing values', 
+                    ha='center', va='center', transform=ax.transAxes, fontsize=8)
+            ax.set_title(f'{feature_names[feature_idx][:15]} - No Missing', fontsize=8)
             continue
             
         # Get predicted and ground truth values for missing positions only
         predicted_values = test_imputations[feature_missing_mask, feature_idx]
         true_values = test_originals[feature_missing_mask, feature_idx]
         
-        # Create scatter plot
-        ax.scatter(true_values, predicted_values, alpha=0.6, s=20, color='steelblue', edgecolors='navy', linewidth=0.5)
+        # Create scatter plot with smaller points for 5x5 grid
+        ax.scatter(true_values, predicted_values, alpha=0.6, s=10, color='steelblue', edgecolors='navy', linewidth=0.3)
         
         # Add perfect prediction line (y=x)
         min_val = min(true_values.min(), predicted_values.min())
         max_val = max(true_values.max(), predicted_values.max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8, linewidth=2, label='Perfect Prediction')
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.8, linewidth=1.5, label='Perfect' if idx == 0 else "")
         
         # Calculate and display metrics
         mse = mean_squared_error(true_values, predicted_values)
@@ -279,60 +347,32 @@ def plot_prediction_scatter(test_imputations, test_originals, test_masks, featur
         except:
             correlation = np.nan
         
-        # Set labels and title
-        ax.set_xlabel('Dataset', fontsize=10)
-        ax.set_ylabel('Predicted', fontsize=10)
-        ax.set_title(f'{feature_names[feature_idx]}\n'
-                    f'R²={correlation:.3f}, MSE={mse:.4f}', fontsize=10, fontweight='bold')
+        # Set labels and title (smaller fonts for 5x5 grid)
+        ax.set_xlabel('Dataset', fontsize=8)
+        ax.set_ylabel('Predicted', fontsize=8)
+        ax.set_title(f'{feature_names[feature_idx][:15]}\nR²={correlation:.3f}, MSE={mse:.4f}', 
+                    fontsize=8, fontweight='bold')
+        
+        # Adjust tick labels
+        ax.tick_params(labelsize=7)
         
         # Add grid and styling
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal', adjustable='box')
         
-        # Add text box with number of missing values
+        # Add text box with number of missing values (smaller for 5x5)
         n_missing = feature_missing_mask.sum()
         ax.text(0.05, 0.95, f'n={n_missing}', transform=ax.transAxes, 
                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
-                verticalalignment='top', fontsize=9)
+                verticalalignment='top', fontsize=7)
     
-    # Add legend to the last subplot
-    axes[-1].legend(loc='lower right', fontsize=9)
+    # Add legend only to the first subplot to avoid clutter
+    if len(selected_features) > 0:
+        axes[0].legend(loc='lower right', fontsize=7)
+    
+    # Hide any unused subplots
+    for idx in range(len(selected_features), 25):
+        axes[idx].set_visible(False)
     
     plt.tight_layout()
     plt.show()
-    
-    # Print summary statistics
-    print(f"\n📊 Prediction Quality Summary (8 Random Features):")
-    print("="*60)
-    
-    all_correlations = []
-    all_mses = []
-    all_maes = []
-    
-    for feature_idx in selected_features:
-        feature_missing_mask = missing_mask[:, feature_idx]
-        if feature_missing_mask.sum() == 0:
-            continue
-            
-        predicted_values = test_imputations[feature_missing_mask, feature_idx]
-        true_values = test_originals[feature_missing_mask, feature_idx]
-        
-        mse = mean_squared_error(true_values, predicted_values)
-        mae = mean_absolute_error(true_values, predicted_values)
-        try:
-            correlation = np.corrcoef(true_values, predicted_values)[0, 1]
-            if not np.isnan(correlation):
-                all_correlations.append(correlation)
-        except:
-            pass
-        
-        all_mses.append(mse)
-        all_maes.append(mae)
-        
-        print(f"{feature_names[feature_idx]:<15} | R²: {correlation:.3f} | MSE: {mse:.4f} | MAE: {mae:.4f} | Missing: {feature_missing_mask.sum()}")
-    
-    print("="*60)
-    print(f"Average R²: {np.mean(all_correlations):.3f} ± {np.std(all_correlations):.3f}")
-    print(f"Average MSE: {np.mean(all_mses):.4f} ± {np.std(all_mses):.4f}")
-    print(f"Average MAE: {np.mean(all_maes):.4f} ± {np.std(all_maes):.4f}")
-

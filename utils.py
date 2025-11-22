@@ -147,17 +147,16 @@ def plot_distribution_comparison(test_imputations_denorm, test_original_denorm, 
         print(f"Only {n_features} features have missing values, showing all of them.")
     
     # Randomly select features to plot
-    np.random.seed(42)  # For reproducible selection
-    selected_indices = np.random.choice(len(features_with_missing), size=min(n_features, len(features_with_missing)), replace=False)
+    selected_indices = range(len(features_with_missing))
     selected_features = [features_with_missing[i] for i in selected_indices]
     
-    # Create 5x5 grid
-    fig, axes = plt.subplots(5, 5, figsize=(20, 16))
+    # Create grid
+    fig, axes = plt.subplots(8, 5, figsize=(20, 16))
     fig.suptitle('Distribution Comparison: Dataset vs Imputed Values', fontsize=16, fontweight='bold')
     axes = axes.flatten()
 
     for idx, (feature_idx, feature_name) in enumerate(selected_features):
-        if idx >= 25:  # Safety check for 5x5 grid
+        if idx > 40:  # Safety check for grid
             break
             
         # Get imputed and ground truth values for missing positions only
@@ -302,18 +301,16 @@ def plot_prediction_scatter(test_imputations, test_originals, test_masks, featur
         n_features = len(features_with_missing)
         print(f"Only {n_features} features have missing values, showing all of them.")
     
-    # Randomly select features to plot
-    np.random.seed(42)  # For reproducible selection
-    selected_features = np.random.choice(features_with_missing, size=n_features, replace=False)
+    selected_features = range(len(features_with_missing))
     
-    # Create 5x5 subplots
-    fig, axes = plt.subplots(5, 5, figsize=(20, 16))
+    # Create subplots
+    fig, axes = plt.subplots(8, 5, figsize=(20, 16))
     fig.suptitle('Predicted vs Ground Truth Values (Missing Positions Only)', fontsize=16, fontweight='bold')
     
     axes = axes.flatten()
     
     for idx, feature_idx in enumerate(selected_features):
-        if idx >= 25:  # Safety check for 5x5 grid
+        if idx > 40:  # Safety check
             break
             
         ax = axes[idx]

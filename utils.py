@@ -305,7 +305,7 @@ def plot_prediction_scatter(test_imputations, test_originals, test_masks, featur
     
     # Create subplots
     fig, axes = plt.subplots(8, 5, figsize=(20, 16))
-    fig.suptitle('Predicted vs Ground Truth Values (Missing Positions Only)', fontsize=16, fontweight='bold')
+    fig.suptitle('Predicted Vs Ground Truth Values (Missing Positions Only)', fontsize=16, fontweight='bold')
     
     axes = axes.flatten()
     
